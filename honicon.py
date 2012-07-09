@@ -44,7 +44,10 @@ def main():
         if e.tag == 'chatsymbol' and e.attrib['texture'].startswith('/heroes/'):
             destname = os.path.join(destdir, e.attrib['name'] + '.png')
             f = open(destname,'wb')
-            f.write(dds2png(textures.open('00000000' + e.attrib['texture'][:-3] + 'dds')))
+            try:
+                f.write(dds2png(textures.open('00000000' + e.attrib['texture'][:-3] + 'dds')))
+            except:
+                print ( 'failed processing ' + e.attrib['name'] + ',' + e.attrib['texture'])
             f.close()
 
 
