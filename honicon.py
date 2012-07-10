@@ -41,13 +41,22 @@ def main():
 
     xml = etree.fromstring(upgrades)
     for e in xml:
-        if e.tag == 'chatsymbol' and e.attrib['texture'].startswith('/heroes/'):
+        if (e.tag == 'chatsymbol' and e.attrib['texture'].startswith('/heroes/')) or e.tag == 'accounticon':
+        #if e.attrib['name'] == 'YouNube':
             destname = os.path.join(destdir, e.attrib['name'] + '.png')
             f = open(destname,'wb')
             try:
                 f.write(dds2png(textures.open('00000000' + e.attrib['texture'][:-3] + 'dds')))
             except:
-                print ( 'failed processing ' + e.attrib['name'] + ',' + e.attrib['texture'])
+                print ( 'failed converting ' + e.attrib['name'] + '(' + e.attrib['texture'] + '), trying to save as dds')
+                try:
+                    f.close()
+                    os.unlink(destname)
+                    destname = destname[:-3] + 'dds'
+                    f = open(destname,'wb')
+                    f.write(textures.read('00000000' + e.attrib['texture'][:-3] + 'dds'))
+                except:
+                    print('failed writing as dds too :(')
             f.close()
 
 

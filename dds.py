@@ -62,10 +62,38 @@ DDSCAPS_TEXTURE = 0x1000
 DDSCAPS_MIPMAP = 0x00400000
     
 DDSCAPS_EXPECTED = DDSCAPS_TEXTURE
+#import pdb
+def decodeBC3alphablock(data):
+    out = ['', '', '', '']  # row accumulators
+    # Decode next 8-byte block.        
+    a0, a1 ,bits1,bits2= struct.unpack('<BBHI', data)
+    bits = bits1 | (bits2 << 16)
+
+    if a0 > a1:
+        lookup = [a0, a1, (6*a0 + 1*a1)/7, (5*a0+2*a1)/7, (4*a0+3*a1)/7, (3*a0+4*a1)/7, \
+                (2*a0+5*a1)/7, (a0+6*a1)/7]
+    else:
+        lookup = [a0, a1, (4*a0 + 1*a1)/5, (3*a0+2*a1)/5, (2*a0+3*a1)/5, (1*a0+4*a1)/5, \
+                0, 255]
+    lookup = map(chr,lookup)
+
+    # Decode this block into 4x4 pixels
+    # Accumulate the results onto our 4 row accumulators
+    for yo in xrange(4):
+        for xo in xrange(4):
+            op = (bits & (7 << 45)) >> 45
+            bits <<= 3
+            out[yo] += lookup[op]
+    out = reversed(map(reversed,out))
+
+            
+
+    # All done.
+    return tuple(out)
+
 # Python-only DXT1 decoder; this is slow!
 # Better to use _dxt1.decodeDXT1 if you can
 # (it's used automatically if available by DdsImageFile)
-#import pdb
 def pythonDecodeDXT1(data):
     # input: one "row" of data (i.e. will produce 4*width pixels)
     blocks = len(data) / 8  # number of blocks in row
@@ -121,6 +149,11 @@ def pythonDecodeDXT1(data):
 
     # All done.
     return tuple(out)
+def chunks(l, n):
+    """ Yield successive n-sized chunks from l.
+    """
+    for i in xrange(0, len(l), n):
+        yield l[i:i+n]
 
 class DdsImageFile():
     format = 'DDS'
@@ -161,6 +194,10 @@ class DdsImageFile():
                 else:
                     self.mode = 'RGB'
                     self.load = self._loadDXTOpaque
+            elif pf_dwFourCC == 'DXT5':
+                self.mode = 'RGBA'
+                self.load = self._loadDXT5
+                #self.load = self._loadDXTOpaque
             else:
                 raise SyntaxError, 'Unsupported FOURCC mode: %s' % pf_dwFourCC
         else:
@@ -169,6 +206,51 @@ class DdsImageFile():
             # Construct the tile.
             self.tile = [('raw', (0,0,dwWidth,dwHeight), 128,
                           ('RGBX', dwPitchLinear - dwWidth, 1))]
+
+    def _loadDXT5(self):
+        global dxt1Decoder
+        
+        if self._loaded: return
+        if not dxt1Decoder:
+        	# dxt1Decoder = pythonDecodeDXT1
+            # Haven't selected a decoder yet. Try to get the C implementation
+            try:
+                import _dxt1
+                dxt1Decoder = _dxt1.decodeDXT1
+            except ImportError:
+                #print "WARNING: Failed to import _dxt1 module."
+                #print "WARNING: I'll use the slow python-based decoder instead."
+                dxt1Decoder = pythonDecodeDXT1
+
+        # one entry per Y row, we join them up at the end
+        data = []
+        #self.fp.seek(128) # skip header
+
+        linesize = (self.size[0] + 3) / 4 * 16 # Number of data byte per row
+        #import pdb
+
+        baseoffset = 0
+        #pdb.set_trace()
+        for yb in xrange((self.size[1] + 3) / 4):             
+            decoded = ['']*4
+            for _ in xrange(linesize/16):             
+                linealpha = decodeBC3alphablock(self.fp.read(8))
+                pixels = dxt1Decoder(self.fp.read(8)) # returns 4-tuple of RGB lines
+
+                for z in xrange(len(pixels)):
+                    decoded[z] += ''.join([''.join(list(x)) for x in zip(chunks(pixels[z],3),linealpha[z])])
+            for d in decoded:
+                # Make sure that if we have a texture size that's not a
+                # multiple of 4 that we correctly truncate the returned data
+                data.append(d[:self.size[0]*4])
+                #data.append(d)
+
+        # Now build the final image from our data strings
+        self.data = string.join(data[:self.size[1]],'')
+        #self.data = data
+        #self.im = Image.core.new(self.mode, self.size)
+        #self.fromstring(data)
+        self._loaded = 1
 
     def _loadDXTOpaque(self):
         global dxt1Decoder
@@ -217,8 +299,20 @@ def dds2png(f):
     dds.open(f)
     dds.load()
     width,height = dds.size
-    raw_pixels = [[struct.unpack('BBB', dds.data[3 * (y * width + x) : 3 * (y * width + x) + 3]) for x in xrange(width)] for y in xrange(height-1, -1, -1)]
-    pixels = [[c for px in row for c in (px[0], px[1], px[2], 255)] for row in raw_pixels]
+    #print width,height
+    #print len(dds.data)
+    #for y in xrange(height-1,-1,-1):
+        #for x in xrange(width):
+            #print x,y,dds.data[3 * (y* width + x) : 3 * (y * width + x) + 3],'asdfasdf'
+            #print len(dds.data[3 * (y* width + x) : 3 * (y * width + x) + 3])
+    #raw_pixels = [[len(dds.data[3 * (y * width + x) : 3 * (y * width + x) + 3]) for x in xrange(width)] for y in xrange(height-1, -1, -1)]
+    #print raw_pixels
+    if dds.mode == 'RGB':
+        raw_pixels = [[struct.unpack('BBB', dds.data[3 * (y * width + x) : 3 * (y * width + x) + 3]) for x in xrange(width)] for y in xrange(height-1, -1, -1)]
+        pixels = [[c for px in row for c in (px[0], px[1], px[2], 255)] for row in raw_pixels]
+    elif dds.mode == 'RGBA':
+        raw_pixels = [[struct.unpack('BBBB', dds.data[4 * (y * width + x) : 4 * (y * width + x) + 4]) for x in xrange(width)] for y in xrange(height-1, -1, -1)]
+        pixels = [[c for px in row for c in (px[0], px[1], px[2], px[3])] for row in raw_pixels]
     out = StringIO()
     w = png.Writer(width,height,alpha=True,compression=9)
     w.write(out, pixels)
